@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/arsyadmdz/efta/main/docs/_static/logo.png" width="200" alt="efta logo">
+  <img src="https://github.com/arsyadmdz/efta/blob/main/docs/\\\_static/logo.png" width="200" alt="efta logo">
 </p>
 
-<h1 align="center">efta — Equilibrium Formulation and Thermodynamic Analysis</h1>
+<h1 align="center">efta — Equilibrium Formulation API</h1>
 
 <p align="center">
   <a href="https://pypi.org/project/efta/"><img src="https://badge.fury.io/py/efta.svg" alt="PyPI version"></a>
