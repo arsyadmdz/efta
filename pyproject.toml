@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "efta"
+version = "1.0.0"
+description = "Equilibrium Formulation API — a Python library for solving chemical equilibrium problems"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [
+    { name = "efta contributors" },
+]
+keywords = [
+    "chemistry",
+    "equilibrium",
+    "thermodynamics",
+    "speciation",
+    "solvent extraction",
+    "chemical engineering",
+    "hydrometallurgy",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Education",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: OS Independent",
+    "Typing :: Typed",
+]
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "matplotlib>=3.6",
+]
+
+[project.optional-dependencies]
+# Extra solvers and fitting tools
+fitting = [
+    "scipy>=1.10",
+]
+# Developer / testing tools
+dev = [
+    "pytest>=7",
+    "pytest-cov",
+    "ruff",
+    "mypy",
+]
+
+[project.urls]
+"Source Code" = "https://github.com/arsyadmdz/efta"
+"Bug Tracker" = "https://github.com/arsyadmdz/efta/issues"
+"Documentation" = "https://efta.readthedocs.io"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["efta*"]
+
+[tool.setuptools.package-data]
+efta = ["py.typed"]
