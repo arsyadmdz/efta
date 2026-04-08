@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://github.com/arsyadmdz/efta/blob/main/docs/_static/logo.png" width="200" alt="efta logo">
+  <img src="https://github.com/arsyadmdz/efta/blob/main/docs/_static/logo.png?raw=true" width="200" alt="efta logo">
 </p>
 
 <h1 align="center">efta — Equilibrium Formulation API</h1>
