@@ -114,6 +114,26 @@ def _blend_solutions(solutions: List[_solution]) -> _solution:
     return result
 
 
+def _ceq_to_outlets(ceq: dict, v_aq: float, v_org: float) -> '_mixture':
+    """
+    Build a mixture(organic, aqueous) directly from solver-output concentrations.
+
+    The solver returns ceq with:
+      - aqueous species: mol / L_aq
+      - organic species: mol / L_org
+
+    These are already on the correct per-phase-volume basis, so we just split
+    them into two pure-phase solutions with the appropriate volumes.  We must
+    NOT go through solution.separate(), which assumes concentrations are on a
+    total-volume basis and would rescale them again (doubling error).
+    """
+    org_conc = {sp: c for sp, c in ceq.items() if _is_org(sp)}
+    aq_conc  = {sp: c for sp, c in ceq.items() if not _is_org(sp)}
+    org_sol  = _solution._from_eq(org_conc, volume=v_org)
+    aq_sol   = _solution._from_eq(aq_conc,  volume=v_aq)
+    return _mixture(org_sol, aq_sol)
+
+
 class sx:
     """
     Single-stage solvent extraction unit.
@@ -338,16 +358,18 @@ class sx:
         # ── blend all inlets ──────────────────────────────────────────────
         blended = _blend_solutions(self._inlets)
 
+        v_aq  = blended.v_aq
+        v_org = blended.v_org
+
         # Determine v_oa from blended solution (or fall back to 1.0)
         v_oa = blended.v_oa
         if v_oa is None:
             # All inlets are same phase — still need a ratio for the solver
-            has_org = any(_is_org(sp) for sp in blended)
             v_oa = 1.0      # arbitrary; solver result will reflect composition
-
-        v_total = blended.volume
-        v_aq  = v_total / (1.0 + v_oa)
-        v_org = v_total * v_oa / (1.0 + v_oa)
+            # Recompute phase volumes with the fallback v_oa
+            v_total = blended.volume
+            v_aq  = v_total / (1.0 + v_oa)
+            v_org = v_total * v_oa / (1.0 + v_oa)
 
         # Build c0 for the solver
         c0: Dict[str, float] = dict(blended.concentrations)
@@ -355,8 +377,11 @@ class sx:
 
         ceq = self.reactions.equilibrium(c0)
 
-        ceq_sol = _solution(ceq, volume=blended.volume, v_oa=v_oa)
-        mix = ceq_sol.separate()
+        # The solver returns ceq with:
+        #   aqueous species: mol / L_aq
+        #   organic species: mol / L_org
+        # Build the two outlet solutions directly — no rescaling needed.
+        mix = _ceq_to_outlets(ceq, v_aq, v_org)
 
         # Apply efficiency by blending equilibrium result back toward initial
         if self.efficiency < 1.0:
@@ -366,8 +391,7 @@ class sx:
                      + self.efficiency * (ceq[sp] - c0_plain.get(sp, 0.0)))
                 for sp in ceq
             }
-            ceq_sol_eff = _solution(ceq_eff, volume=blended.volume, v_oa=v_oa)
-            mix = ceq_sol_eff.separate()
+            mix = _ceq_to_outlets(ceq_eff, v_aq, v_org)
 
         self._outlets = mix
         self.ran = True

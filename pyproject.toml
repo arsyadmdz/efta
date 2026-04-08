@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "efta"
-version = "1.0.0"
+version = "1.0.2"
 description = "Equilibrium Formulation API — a Python library for solving chemical equilibrium problems"
 readme = "README.md"
 license = "MIT"

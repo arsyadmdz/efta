@@ -2,7 +2,7 @@
 
 All notable changes to efta are documented here.
 
-## [1.0.0] — 2026-04-06
+## [1.0.2] — 2026-04-06
 
 ### Added
 - Initial PyPI release.
@@ -20,3 +20,4 @@ All notable changes to efta are documented here.
 - Styling helpers: `coloring()`, `randomize_color()`, built-in palettes including `'colorblind'`, `'ocean'`, `'earth'`.
 - Complete error hierarchy (`EftaError`, `ConvergenceError`, `ConvergenceWarning`, …).
 - `py.typed` marker — efta is fully typed.
+- Fix bugs in solution operations

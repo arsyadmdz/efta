@@ -127,6 +127,7 @@ class solution:
         self._volume: float = float(volume)
         self._v_oa: Optional[float] = self._init_voa(v_oa)
         self._gamma: dict = {}
+        self._reactions = None  # default reaction system (set via set_reactions)
 
     @classmethod
     def _from_eq(cls, ceq: Dict[str, float], volume: float = 1.0,
@@ -138,6 +139,7 @@ class solution:
         obj._volume = float(volume)
         obj._v_oa   = obj._init_voa(v_oa)
         obj._gamma  = {}
+        obj._reactions = None
         return obj
 
     # ------------------------------------------------------------------
@@ -173,6 +175,7 @@ class solution:
         new_conc = {sp: c * factor for sp, c in self._conc.items()}
         result = solution._from_eq(new_conc, volume=new_volume, v_oa=self._v_oa)
         result._gamma = dict(self._gamma)
+        result._reactions = self._reactions
         return result
 
     # ------------------------------------------------------------------
@@ -329,6 +332,44 @@ class solution:
                 f"v_ao must be positive, got {value}.\n"
                 f"v_ao is the aqueous/organic volume ratio.")
         self._v_oa = 1.0 / value
+
+    @property
+    def v_aq(self) -> float:
+        """
+        Aqueous volume of this solution (L).
+
+        - Mixed-phase (``v_oa`` set): ``V / (1 + v_oa)``
+        - Pure-aqueous (no organic species, ``v_oa`` is None): ``volume``
+        - Pure-organic (only organic species, ``v_oa`` is None): ``0.0``
+        """
+        r = self._v_oa
+        if r is not None:
+            return self._volume / (1.0 + r)
+        # single-phase: classify by content
+        has_org = any(is_organic(sp) for sp in self._conc)
+        has_aq  = any(not is_organic(sp) and not is_solid(sp) for sp in self._conc)
+        if has_org and not has_aq:
+            return 0.0
+        return self._volume
+
+    @property
+    def v_org(self) -> float:
+        """
+        Organic volume of this solution (L).
+
+        - Mixed-phase (``v_oa`` set): ``V * v_oa / (1 + v_oa)``
+        - Pure-organic (only organic species, ``v_oa`` is None): ``volume``
+        - Pure-aqueous (no organic species, ``v_oa`` is None): ``0.0``
+        """
+        r = self._v_oa
+        if r is not None:
+            return self._volume * r / (1.0 + r)
+        # single-phase: classify by content
+        has_org = any(is_organic(sp) for sp in self._conc)
+        has_aq  = any(not is_organic(sp) and not is_solid(sp) for sp in self._conc)
+        if has_org and not has_aq:
+            return self._volume
+        return 0.0
 
     @property
     def volume(self) -> float:
@@ -703,46 +744,55 @@ class solution:
         """
         if not isinstance(other, solution):
             return NotImplemented
-        v_total = self._volume + other._volume
-        all_sp  = set(self._conc) | set(other._conc)
-        mixed   = {
-            sp: (self.moles(sp) + other.moles(sp)) / v_total
-            for sp in all_sp
-        }
 
         def _phase_volumes(sol):
-            """Return (V_org, V_aq) for a solution based on v_oa and phase content."""
-            v = sol._volume
-            r = sol._v_oa
-            if r is not None:
-                # Mixed-phase solution: split by v_oa
-                return v * r / (1.0 + r), v / (1.0 + r)
-            # Single-phase: classify by species content
-            has_org = any(is_organic(sp) for sp in sol._conc)
-            has_aq  = any(not is_organic(sp) and not is_solid(sp)
-                          for sp in sol._conc)
-            if has_org and not has_aq:
-                return v, 0.0   # pure organic
-            if has_aq and not has_org:
-                return 0.0, v   # pure aqueous
-            # Empty or ambiguous single-phase: treat as aqueous
-            return 0.0, v
+            """Return (V_org, V_aq) using v_aq/v_org properties."""
+            return sol.v_org, sol.v_aq
 
         v_org1, v_aq1 = _phase_volumes(self)
         v_org2, v_aq2 = _phase_volumes(other)
         v_org_total   = v_org1 + v_org2
         v_aq_total    = v_aq1  + v_aq2
 
+        # Compute moles per species using the volume of the phase it lives in.
+        # For each species, moles = conc * phase_volume of that solution.
+        def _moles_in(sol, sp):
+            if is_organic(sp):
+                return sol._conc.get(sp, 0.0) * sol.v_org
+            else:
+                return sol._conc.get(sp, 0.0) * sol.v_aq
+
+        all_sp = set(self._conc) | set(other._conc)
+
+        mixed = {}
+        for sp in all_sp:
+            n = _moles_in(self, sp) + _moles_in(other, sp)
+            if is_organic(sp):
+                denom = v_org_total
+            else:
+                denom = v_aq_total
+            mixed[sp] = n / denom if denom > 0 else 0.0
+
+        v_total = self._volume + other._volume
+
         if v_aq_total > 0 and v_org_total > 0:
             v_oa_mix = v_org_total / v_aq_total
-        elif v_aq_total > 0:
-            v_oa_mix = None   # no organic phase present
-        elif v_org_total > 0:
-            v_oa_mix = None   # no aqueous phase present
         else:
             v_oa_mix = None
 
-        return solution._from_eq(mixed, volume=v_total, v_oa=v_oa_mix)
+        result = solution._from_eq(mixed, volume=v_org_total + v_aq_total, v_oa=v_oa_mix)
+
+        # Merge reactions: combine both sets (deduplicated via reactions.__add__)
+        r1 = self._reactions
+        r2 = other._reactions
+        if r1 is not None and r2 is not None:
+            result._reactions = r1 + r2
+        elif r1 is not None:
+            result._reactions = r1
+        elif r2 is not None:
+            result._reactions = r2
+
+        return result
 
     def dilute(self, factor: float) -> 'solution':
         """
@@ -761,10 +811,12 @@ class solution:
         if factor <= 0:
             raise InputError(
                 f"Dilution factor must be positive, got {factor}.")
-        return solution._from_eq(
+        result = solution._from_eq(
             {sp: c / factor for sp, c in self._conc.items()},
             volume=self._volume * factor,
         )
+        result._reactions = self._reactions
+        return result
 
     def scale_volume(self, new_volume: float) -> 'solution':
         """
@@ -780,10 +832,12 @@ class solution:
             raise InputError(
                 f"new_volume must be positive, got {new_volume}.")
         factor = new_volume / self._volume
-        return solution._from_eq(
+        result = solution._from_eq(
             {sp: c / factor for sp, c in self._conc.items()},
             volume=new_volume,
         )
+        result._reactions = self._reactions
+        return result
 
     def __mul__(self, factor: float) -> 'solution':
         """
@@ -798,10 +852,12 @@ class solution:
         factor = float(factor)
         if factor <= 0:
             raise InputError(f"Scaling factor must be positive, got {factor}.")
-        return solution._from_eq(
+        result = solution._from_eq(
             {sp: c * factor for sp, c in self._conc.items()},
             volume=self._volume, v_oa=self._v_oa,
         )
+        result._reactions = self._reactions
+        return result
 
     def __rmul__(self, factor: float) -> 'solution':
         """Support ``2 * sol``."""
@@ -843,7 +899,9 @@ class solution:
         sp_norm = _norm(sp)
         new_conc = dict(self._conc)
         new_conc[sp_norm] = new_conc.get(sp_norm, 0.0) + moles / self._volume
-        return solution._from_eq(new_conc, volume=self._volume, v_oa=self._v_oa)
+        result = solution._from_eq(new_conc, volume=self._volume, v_oa=self._v_oa)
+        result._reactions = self._reactions
+        return result
 
     def remove(self, sp: str, moles: float) -> 'solution':
         """
@@ -873,7 +931,9 @@ class solution:
                 f"only {current:.4e} mol present.")
         new_conc = dict(self._conc)
         new_conc[sp_norm] = max(0.0, (current - moles) / self._volume)
-        return solution._from_eq(new_conc, volume=self._volume, v_oa=self._v_oa)
+        result = solution._from_eq(new_conc, volume=self._volume, v_oa=self._v_oa)
+        result._reactions = self._reactions
+        return result
 
     def to_c0(self) -> dict:
         """
@@ -918,7 +978,9 @@ class solution:
             new_v_oa = None
         elif phase == 'aqueous':
             new_v_oa = None
-        return solution._from_eq(new_conc, volume=self._volume, v_oa=new_v_oa)
+        result = solution._from_eq(new_conc, volume=self._volume, v_oa=new_v_oa)
+        result._reactions = self._reactions
+        return result
 
     # ------------------------------------------------------------------
     # Gamma / activity coefficients
@@ -944,14 +1006,76 @@ class solution:
             rxn_sys = _reactions(*new_rxns)
         return rxn_sys
 
-    def equilibrate(self, rxn_sys, **kw) -> 'solution':
+    def set_reactions(self, rxn_sys) -> 'solution':
+        """
+        Set the default reaction system for this solution.
+
+        The stored reactions are used automatically by :meth:`equilibrate`
+        when no ``rxn_sys`` argument is supplied.  The property persists
+        through volume clones (``sol(V)``), arithmetic mutations
+        (``*``, ``/``, ``dilute``, ``add``, ``remove``, ``strip``),
+        and the ``<<`` operator.  When two solutions are added
+        (``sol1 + sol2``) their reaction sets are merged (deduplicated).
+
+        Parameters
+        ----------
+        rxn_sys : reaction or reactions
+            A single :class:`~efta.reaction.reaction` or a
+            :class:`~efta.reactions.reactions` collection.
+
+        Returns
+        -------
+        solution
+            *self*, for chaining.
+
+        Examples
+        --------
+        >>> sol.set_reactions(sys)
+        >>> sol.equilibrate()          # uses sys automatically
+
+        >>> sol.set_reactions(r1)      # single reaction also accepted
+        >>> sol.equilibrate()
+
+        >>> sol2 = sol.set_reactions(sys)(2.0)  # clone preserves reactions
+        >>> sol2.reactions is sys
+        True
+        """
+        from .reactions import reactions as _reactions_cls
+        from .reaction  import reaction  as _reaction_cls
+        if isinstance(rxn_sys, _reaction_cls):
+            rxn_sys = _reactions_cls(rxn_sys)
+        elif not isinstance(rxn_sys, _reactions_cls):
+            raise InputError(
+                f"rxn_sys must be a reaction or reactions object, "
+                f"got {type(rxn_sys).__name__!r}.")
+        self._reactions = rxn_sys
+        return self
+
+    @property
+    def reactions(self):
+        """
+        The default reaction system set via :meth:`set_reactions`, or ``None``.
+
+        Used automatically by :meth:`equilibrate` when no ``rxn_sys``
+        argument is provided.
+
+        Returns
+        -------
+        reactions or None
+        """
+        return self._reactions
+
+    def equilibrate(self, rxn_sys=None, **kw) -> 'solution':
         """
         Equilibrate this solution in-place and return *self*.
 
         Parameters
         ----------
-        rxn_sys : reaction or reactions
-            The reaction system to equilibrate against.
+        rxn_sys : reaction or reactions, optional
+            The reaction system to equilibrate against.  If omitted, the
+            default set by :meth:`set_reactions` is used.  Raises
+            :class:`~efta.errors.InputError` if no reaction system is
+            available from either source.
         **kw
             Forwarded to :meth:`~efta.reactions.reactions.equilibrium`.
 
@@ -962,9 +1086,18 @@ class solution:
 
         Examples
         --------
-        >>> sol.equilibrate(sys)
+        >>> sol.equilibrate(sys)       # explicit reaction system
+        >>> sol.set_reactions(sys)
+        >>> sol.equilibrate()          # uses stored reactions automatically
         >>> print(sol.pH)
         """
+        if rxn_sys is None:
+            if self._reactions is None:
+                raise InputError(
+                    "No reaction system provided and none stored on this solution.\\n"
+                    "Either pass a reaction/reactions object to equilibrate(), "
+                    "or call sol.set_reactions(sys) first.")
+            rxn_sys = self._reactions
         rxn_sys = self._prepare_rxnsys(rxn_sys)
         ceq = rxn_sys.equilibrium(self, **kw)
         self._conc = {sp: float(c) for sp, c in ceq.items()
@@ -986,6 +1119,7 @@ class solution:
         ceq = rxn_sys.equilibrium(self)
         result = solution._from_eq(ceq, volume=self._volume, v_oa=self._v_oa)
         result._gamma = dict(self._gamma)
+        result._reactions = self._reactions
         return result
 
     # ------------------------------------------------------------------
@@ -1102,10 +1236,10 @@ class solution:
 
         lines = []
         for sp, c in rows:
-            lines.append(f"  {sp:<{w_sp}s}  {c:.4e} mol/L")
+            lines.append(f"  {sp:<{w_sp}s}  {c:.4e}")
 
         lines.append("")
-        lines.append(f"  V = {self._volume:.4g} L")
+        lines.append(f"  V = {self._volume:.4g}")
         if self._v_oa is not None:
             lines.append(f"  V_org/V_aq = {self._v_oa:.4g}"
                          f"  (V_aq/V_org = {1/self._v_oa:.4g})")
